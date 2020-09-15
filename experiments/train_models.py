@@ -123,25 +123,27 @@ def train_cateModels(args, cate_data, plot_title, key):
 def train_DEEPGBM(args, num_data, cate_data, plot_title, key, trained_gbdt_model=None):
     tree_layers = [int(x) for x in args.tree_layers.split(',')]
     cate_layers = [int(x) for x in args.cate_layers.split(',')]
-    train_x, train_y, test_x, test_y = num_data
+    train_x, train_y, valid_x, valid_y, test_x, test_y = num_data
     if trained_gbdt_model:
         gbm, train_tree_pred = trained_gbdt_model
     else:
-        gbm, train_tree_pred = TrainGBDT(train_x, train_y, test_x, test_y, args.tree_lr, args.ntrees, args.maxleaf, args.mindata, args.task)
-    gbms = SubGBDTLeaf_cls(train_x, test_x, gbm, args.maxleaf, num_slices=args.nslices, args = args)
+        gbm, train_tree_pred = TrainGBDT(train_x, train_y, valid_x, valid_y, args.tree_lr, args.ntrees, args.maxleaf, args.mindata, args.task)
+    gbms = SubGBDTLeaf_cls(train_x, valid_x, test_x, gbm, args.maxleaf, num_slices=args.nslices, args = args)
     min_len_features = train_x.shape[1]
     used_features = []
     tree_outputs = []
     leaf_preds = []
+    valid_leaf_preds = []
     test_leaf_preds = []
     n_output = train_y.shape[1]
     max_ntree_per_split = 0
     group_average = []
-    for used_feature, new_train_y, leaf_pred, test_leaf_pred, avg, all_avg in gbms:
+    for used_feature, new_train_y, leaf_pred, valid_leaf_pred, test_leaf_pred, avg, all_avg in gbms:
         used_features.append(used_feature)
         min_len_features = min(min_len_features, len(used_feature))
         tree_outputs.append(new_train_y)
         leaf_preds.append(leaf_pred)
+        valid_leaf_preds.append(valid_leaf_pred)
         test_leaf_preds.append(test_leaf_pred)
         group_average.append(avg)
         max_ntree_per_split = max(max_ntree_per_split, leaf_pred.shape[1])
@@ -156,33 +158,53 @@ def train_DEEPGBM(args, num_data, cate_data, plot_title, key, trained_gbdt_model
                                             np.zeros([leaf_preds[i].shape[0],
                                             max_ntree_per_split-leaf_preds[i].shape[1]],
                                             dtype=np.int32)], axis=1)
+            valid_leaf_preds[i] = np.concatenate([valid_leaf_preds[i] + 1,
+                                                  np.zeros([valid_leaf_preds[i].shape[0],
+                                                  max_ntree_per_split-valid_leaf_preds[i].shape[1]],
+                                                  dtype=np.int32)], axis=1)
             test_leaf_preds[i] = np.concatenate([test_leaf_preds[i] + 1, 
                                                  np.zeros([test_leaf_preds[i].shape[0],
-                                                max_ntree_per_split-test_leaf_preds[i].shape[1]],
-                                                dtype=np.int32)], axis=1)
+                                                 max_ntree_per_split-test_leaf_preds[i].shape[1]],
+                                                 dtype=np.int32)], axis=1)
     leaf_preds = np.concatenate(leaf_preds, axis=1)
+    valid_leaf_preds = np.concatenate(valid_leaf_preds, axis=1)
     test_leaf_preds = np.concatenate(test_leaf_preds, axis=1)
     emb_model = EmbeddingModel(n_models, max_ntree_per_split, args.embsize, args.maxleaf+1, n_output, group_average, task=args.task).to(device)
     tree_layers.append(args.embsize)
     opt = AdamW(emb_model.parameters(), lr=args.emb_lr, weight_decay=args.l2_reg)
     tree_outputs = np.asarray(tree_outputs).reshape((n_models, leaf_preds.shape[0])).transpose((1,0))
     TrainWithLog(args, plot_title, leaf_preds, train_y, tree_outputs,
-                 test_leaf_preds, test_y, emb_model, opt,
+                 valid_leaf_preds, valid_y, test_leaf_preds, test_y, emb_model, opt,
                  args.emb_epoch, args.batch_size, n_output, key+"emb-")
+    del tree_outputs, valid_leaf_preds, test_leaf_preds
+    gc.collect()
     output_w = emb_model.bout.weight.data.cpu().numpy().reshape(n_models*args.embsize, n_output)
     output_b = np.array(emb_model.bout.bias.data.cpu().numpy().sum())
-    train_embs = GetEmbPred(emb_model, emb_model.lastlayer, leaf_preds, args.test_batch_size)
-    del tree_outputs, leaf_preds, test_leaf_preds
+    train_embs = GetEmbPred(emb_model, emb_model.lastlayer, leaf_preds, args.test_batch_size, args.nslices * args.embsize)
+    del leaf_preds
     gc.collect()
     tree_outputs = train_embs
     # cate_model dataset loading
-    train, test = cate_data
+    train, valid, test = cate_data
     train_xc, _, feature_sizes = train
+    valid_xc, _, _ = valid
     test_xc, _, _ = test
     field_size = train_xc.shape[1]
-    concate_train_x = np.concatenate([train_x, np.zeros((train_x.shape[0],1), dtype=np.float32)], axis=-1)
-    concate_test_x = np.concatenate([test_x, np.zeros((test_x.shape[0],1), dtype=np.float32)], axis=-1)
-    del train_x, test_x
+    if isinstance(train_x, scipy.sparse.csr_matrix):
+        train_x.resize(train_x.shape[0], train_x.shape[1] + 1)
+        concate_train_x = train_x
+        concate_train_x.indices = concate_train_x.indices.astype(np.int64)
+        valid_x.resize(valid_x.shape[0], valid_x.shape[1] + 1)
+        concate_valid_x = valid_x
+        concate_valid_x.indices = concate_valid_x.indices.astype(np.int64)
+        test_x.resize(test_x.shape[0], test_x.shape[1] + 1)
+        concate_test_x = test_x
+        concate_test_x.indices = concate_test_x.indices.astype(np.int64)
+    else:
+        concate_train_x = np.concatenate([train_x, np.zeros((train_x.shape[0],1), dtype=np.float32)], axis=-1)
+        concate_valid_x = np.concatenate([valid_x, np.zeros((valid_x.shape[0],1), dtype=np.float32)], axis=-1)
+        concate_test_x = np.concatenate([test_x, np.zeros((test_x.shape[0],1), dtype=np.float32)], axis=-1)
+    del train_x, valid_x, test_x
     gc.collect()
     for seed in args.seeds:
         np.random.seed(seed)
@@ -193,9 +215,9 @@ def train_DEEPGBM(args, num_data, cate_data, plot_title, key, trained_gbdt_model
                                 embedding_size=args.embsize).to(device)
         opt = AdamW(deepgbm_model.parameters(), lr=args.lr, weight_decay=args.l2_reg, amsgrad=False, model_decay_opt=deepgbm_model, weight_decay_opt=args.l2_reg_opt, key_opt='deepfm')
         TrainWithLog(args, plot_title+'seed'+str(seed), concate_train_x, train_y, tree_outputs,
-                     concate_test_x, test_y, deepgbm_model, opt,
+                     concate_valid_x, valid_y, concate_test_x, test_y, deepgbm_model, opt,
                      args.max_epoch, args.batch_size, n_output, key,
-                     train_x_opt=train_xc, test_x_opt=test_xc)
+                     train_x_opt=train_xc, valid_x_opt=valid_xc, test_x_opt=test_xc)
         _,pred_y = EvalTestset(concate_test_x, test_y, deepgbm_model, args.test_batch_size, test_x_opt=test_xc)
         metric = eval_metrics(args.task, test_y, pred_y)
         print('Final metrics: %s'%str(metric))

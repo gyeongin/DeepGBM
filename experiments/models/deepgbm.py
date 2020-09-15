@@ -70,13 +70,13 @@ class DeepGBM(torch.nn.Module):
         else:
             alpha = self.alpha+1
             beta = self.beta
-        out = alpha * gbdt2nn_out.view(-1) + beta * deepfm_out.view(-1)
+        out = alpha * gbdt2nn_out.reshape(-1) + beta * deepfm_out.reshape(-1)
         if self.task != 'regression':
             return nn.Sigmoid()(out), gbdt2nn_pred
         return out, gbdt2nn_pred
 
     def joint_loss(self, out, target, gbdt2nn_emb_pred, gbdt2nn_emb_target, ratio):
-        return (1-ratio) * self.criterion(out.view(-1), target.view(-1)) + ratio * self.gbdt2nn.emb_loss(gbdt2nn_emb_pred, gbdt2nn_emb_target)
+        return (1-ratio) * self.criterion(out.reshape(-1), target.reshape(-1)) + ratio * self.gbdt2nn.emb_loss(gbdt2nn_emb_pred, gbdt2nn_emb_target)
 
     def true_loss(self, out, target):
-        return self.criterion(out.view(-1), target.view(-1))
+        return self.criterion(out.reshape(-1), target.reshape(-1))

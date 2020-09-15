@@ -148,12 +148,12 @@ class DeepFM(torch.nn.Module):
         """
         Xi = X.long()
         if self.use_fm:
-            fm_first_order = self.fm_first_order_embedding(Xi.view(X.size(0)*self.field_size)).view(X.size(0), -1)
+            fm_first_order = self.fm_first_order_embedding(Xi.reshape(X.size(0)*self.field_size)).reshape(X.size(0), -1)
             if self.is_shallow_dropout:
                 fm_first_order = self.fm_first_order_dropout(fm_first_order)
 
             # use 2xy = (x+y)^2 - x^2 - y^2 reduce calculation
-            fm_second_order_emb = self.fm_second_order_embedding(Xi.view(X.size(0)*self.field_size)).view(X.size(0), self.field_size, -1)
+            fm_second_order_emb = self.fm_second_order_embedding(Xi.reshape(X.size(0)*self.field_size)).reshape(X.size(0), self.field_size, -1)
             fm_sum_second_order_emb = torch.sum(fm_second_order_emb, 1)
             fm_sum_second_order_emb_square = fm_sum_second_order_emb*fm_sum_second_order_emb # (x+y)^2
             fm_second_order_emb_square = fm_second_order_emb * fm_second_order_emb
@@ -165,7 +165,7 @@ class DeepFM(torch.nn.Module):
             wide part
         """
         if self.use_wide:
-            fm_first_order = self.fm_first_order_embedding(Xi.view(X.size(0)*self.field_size)).view(X.size(0), -1)
+            fm_first_order = self.fm_first_order_embedding(Xi.reshape(X.size(0)*self.field_size)).reshape(X.size(0), -1)
             if self.is_shallow_dropout:
                 fm_first_order = self.fm_first_order_dropout(fm_first_order)
         """
@@ -175,7 +175,7 @@ class DeepFM(torch.nn.Module):
             if self.use_fm:
                 deep_emb = fm_second_order_emb.reshape(Xi.size(0),-1)
             else:
-                deep_emb = self.fm_second_order_embedding(Xi.view(X.size(0)*self.field_size)).view(X.size(0), -1)
+                deep_emb = self.fm_second_order_embedding(Xi.reshape(X.size(0)*self.field_size)).reshape(X.size(0), -1)
             if self.deep_layers_activation == 'sigmoid':
                 activation = nn.Sigmoid()
             elif self.deep_layers_activation == 'tanh':
@@ -215,4 +215,4 @@ class DeepFM(torch.nn.Module):
         return total_sum
 
     def true_loss(self, out, target):
-        return self.criterion(out.view(-1), target.view(-1))
+        return self.criterion(out.reshape(-1), target.reshape(-1))

@@ -8,14 +8,9 @@ import scipy.sparse
 import lightgbm as lgb
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
-import tensorboardX as tbx
 from sklearn.utils.extmath import softmax
 
-from torch.autograd import Variable
 from torch.nn.parameter import Parameter
-from torch.optim import Optimizer
 from tree_model_interpreter import *
 
 import pdb
@@ -70,11 +65,11 @@ def TrainGBDT(train_x, train_y, test_x, test_y, lr, num_trees, maxleaf, mindata,
         'num_leaves': maxleaf,
         'min_data': 40,
         'boost_from_average': boost_from_average,
-        'num_threads': 6,
         'feature_fraction': 0.8,
         'bagging_freq': 3,
         'bagging_fraction': 0.9,
         'learning_rate': lr,
+        'verbose': 2,
     }
     lgb_train_y = train_y.reshape(-1)
     lgb_test_y = test_y.reshape(-1)
@@ -90,9 +85,10 @@ def TrainGBDT(train_x, train_y, test_x, test_y, lr, num_trees, maxleaf, mindata,
     return gbm, preds
 
 
-def SubGBDTLeaf_cls(train_x, test_x, gbm, maxleaf, num_slices, args):
+def SubGBDTLeaf_cls(train_x, valid_x, test_x, gbm, maxleaf, num_slices, args):
     MAX=train_x.shape[1]
     leaf_preds = gbm.predict(train_x, pred_leaf=True).reshape(train_x.shape[0], -1)
+    valid_leaf_preds = gbm.predict(valid_x, pred_leaf=True).reshape(valid_x.shape[0], -1)
     test_leaf_preds = gbm.predict(test_x, pred_leaf=True).reshape(test_x.shape[0], -1)
     n_trees = leaf_preds.shape[1]
     step = int((n_trees + num_slices - 1) // num_slices)
@@ -139,12 +135,13 @@ def SubGBDTLeaf_cls(train_x, test_x, gbm, maxleaf, num_slices, args):
         for kdx in range(max(0, n_feature - len(used_features))):
             used_features.append(MAX)
         cur_leaf_preds = leaf_preds[:, tree_indices]
+        cur_valid_leaf_preds = valid_leaf_preds[:, tree_indices]
         cur_test_leaf_preds = test_leaf_preds[:, tree_indices]
         new_train_y = np.zeros(train_x.shape[0])
         for jdx in tree_indices:
             new_train_y += np.take(leaf_output[jdx,:].reshape(-1), leaf_preds[:,jdx].reshape(-1))
         new_train_y = new_train_y.reshape(-1,1).astype(np.float32)
-        yield used_features, new_train_y, cur_leaf_preds, cur_test_leaf_preds, np.mean(np.take(leaf_output, tree_indices,0)), np.mean(leaf_output)
+        yield used_features, new_train_y, cur_leaf_preds, cur_valid_leaf_preds, cur_test_leaf_preds, np.mean(np.take(leaf_output, tree_indices,0)), np.mean(leaf_output)
 
 class Dense(nn.Module):
     def __init__(self, in_features, out_features, bias_init=0, task='regresion', func=None, length=None):
@@ -202,11 +199,11 @@ class BatchDense(nn.Module):
         return out
 
 def one_hot(y, numslot, mask=None):
-    y_tensor = y.type(type_prefix.LongTensor).view(-1, 1)
+    y_tensor = y.type(type_prefix.LongTensor).reshape(-1, 1)
     y_one_hot = torch.zeros(y_tensor.size()[0], numslot, device=device, dtype=torch.float32, requires_grad=False).scatter_(1, y_tensor, 1)
     if mask is not None:
         y_one_hot = y_one_hot * mask
-    y_one_hot = y_one_hot.view(y.shape[0], -1)
+    y_one_hot = y_one_hot.reshape(y.shape[0], -1)
     return y_one_hot
 
 def SotfCE(outputs, target):

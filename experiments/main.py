@@ -57,8 +57,11 @@ parser.add_argument('-loss_de', type = int, default = 5)
 parser.add_argument('-task', type = str, default = 'regression')
 parser.add_argument('-kd_type', type = str, default = 'emb')
 
+parser.add_argument('-ckpt-path', type = str)
 
 args = parser.parse_args()
+if not os.path.exists(args.ckpt_path):
+    os.mkdir(args.ckpt_path)
 assert(args.nslices <= args.ntrees)
 
 plot_title = args.data + "_" + args.opt + "_s" + str(args.seed) + "_ns" + str(args.nslices) + "_nt" + str(args.ntrees)
@@ -77,22 +80,22 @@ torch.cuda.manual_seed_all(args.seeds[0])
 def main():
     cate_model_list = ['deepfm', 'pnn', 'wideNdeep', 'lr', 'fm']
     if args.model in cate_model_list:
-        cate_data = dh.load_data(args.data+'_cate')
+        cate_data = dh.load_data(args.data+'/cate')
         # designed for fast cateNN
         cate_data = dh.trans_cate_data(cate_data)
         train_cateModels(args, cate_data, plot_title, key="")
     if "gbdt2nn" in args.model:
-        num_data = dh.load_data(args.data+'_num')
+        num_data = dh.load_data(args.data+'/num')
         train_GBDT2NN(args, num_data, plot_title, key="", kd_type=args.kd_type)
     elif args.model == "deepgbm":
-        num_data = dh.load_data(args.data+'_num')
-        cate_data = dh.load_data(args.data+'_cate')
+        num_data = dh.load_data(args.data+'/num')
+        cate_data = dh.load_data(args.data+'/cate')
         # designed for fast cateNN
         cate_data = dh.trans_cate_data(cate_data)
         train_DEEPGBM(args, num_data, cate_data, plot_title, key="")
     elif args.model == 'd1':
-        num_data = dh.load_data(args.data+'_num')
-        cate_data = dh.load_data(args.data+'_cate')
+        num_data = dh.load_data(args.data+'/num')
+        cate_data = dh.load_data(args.data+'/cate')
         # designed for fast cateNN
         cate_data = dh.trans_cate_data(cate_data)
         train_D1(args, num_data, cate_data, plot_title, key="")
